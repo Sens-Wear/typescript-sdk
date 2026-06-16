@@ -1,0 +1,40 @@
+export const LED_SERVICE_UUID = "3c688942-4143-470d-a798-4629803a1983";
+export const LED_COLOR_UUID = "3c688943-4143-470d-a798-4629803a1983";
+
+export const IMU_SERVICE_UUID = "7d2b6c10-9d78-4f3c-a122-6d2c4e6d2a11";
+export const IMU_QUATERNION_UUID = "7d2b6c11-9d78-4f3c-a122-6d2c4e6d2a11";
+export const IMU_LINEAR_ACCELERATION_UUID = "7d2b6c12-9d78-4f3c-a122-6d2c4e6d2a11";
+
+export const HAPTIC_SERVICE_UUID = "daa05e91-f514-4a4e-8fc5-d1b80f25f24d";
+export const HAPTIC_PATTERN_UUID = "daa05e92-f514-4a4e-8fc5-d1b80f25f24d";
+
+export const TEMPERATURE_SERVICE_UUID = "8e83a64b-319d-47c2-ba53-6185fae0007f";
+export const TEMPERATURE_SAMPLING_RATE_UUID = "8e83a64c-319d-47c2-ba53-6185fae0007f";
+export const TEMPERATURE_TRANSFER_INTERVAL_UUID = "8e83a64d-319d-47c2-ba53-6185fae0007f";
+export const TEMPERATURE_SAMPLE_UUID = "8e83a64e-319d-47c2-ba53-6185fae0007f";
+
+export const POWER_SERVICE_UUID = "8f9a1c20-84e7-4a73-9a57-6f6d5d0ab1c2";
+export const POWER_CHARGER_STATE_UUID = "8f9a1c21-84e7-4a73-9a57-6f6d5d0ab1c2";
+export const POWER_GAUGE_STATE_UUID = "8f9a1c22-84e7-4a73-9a57-6f6d5d0ab1c2";
+export const POWER_DAUGHTER_STATE_UUID = "8f9a1c23-84e7-4a73-9a57-6f6d5d0ab1c2";
+
+const CHARACTERISTIC_SERVICE_UUIDS: Record<string, string> = {
+  [LED_COLOR_UUID]: LED_SERVICE_UUID,
+  [IMU_QUATERNION_UUID]: IMU_SERVICE_UUID,
+  [IMU_LINEAR_ACCELERATION_UUID]: IMU_SERVICE_UUID,
+  [HAPTIC_PATTERN_UUID]: HAPTIC_SERVICE_UUID,
+  [TEMPERATURE_SAMPLING_RATE_UUID]: TEMPERATURE_SERVICE_UUID,
+  [TEMPERATURE_TRANSFER_INTERVAL_UUID]: TEMPERATURE_SERVICE_UUID,
+  [TEMPERATURE_SAMPLE_UUID]: TEMPERATURE_SERVICE_UUID,
+  [POWER_CHARGER_STATE_UUID]: POWER_SERVICE_UUID,
+  [POWER_GAUGE_STATE_UUID]: POWER_SERVICE_UUID,
+  [POWER_DAUGHTER_STATE_UUID]: POWER_SERVICE_UUID,
+};
+
+export function serviceUuidForCharacteristic(characteristicUuid: string): string {
+  const serviceUuid = CHARACTERISTIC_SERVICE_UUIDS[characteristicUuid.toLowerCase()];
+  if (serviceUuid === undefined) {
+    throw new Error(`No SensWear service UUID is registered for characteristic ${characteristicUuid}.`);
+  }
+  return serviceUuid;
+}

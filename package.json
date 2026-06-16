@@ -1,0 +1,54 @@
+{
+  "name": "senswear",
+  "version": "0.1.1",
+  "description": "TypeScript SDK for connecting to SensWear hardware from React Native over BLE.",
+  "keywords": [
+    "senswear",
+    "sensewear",
+    "react-native",
+    "ble",
+    "wearable",
+    "battery"
+  ],
+  "author": "Sensera Technologies",
+  "license": "MIT",
+  "homepage": "https://sens-wear.com",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "react-native": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf dist",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "react-native": ">=0.72",
+    "react-native-ble-plx": ">=3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "react-native-ble-plx": "^3.3.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
