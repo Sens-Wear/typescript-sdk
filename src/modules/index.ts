@@ -3,4 +3,7 @@ export * from "./charger";
 export * from "./haptic";
 export * from "./imu";
 export * from "./led";
+export * from "./ppg";
 export * from "./temperature";
+export * from "./time";
+export * from "./touch";

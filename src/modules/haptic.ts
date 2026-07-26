@@ -5,7 +5,7 @@ import type { GattClient } from "./shared";
 
 export const HAPTIC_PATTERN_VERSION = 1;
 export const HAPTIC_PATTERN_FLAGS = 0;
-export const HAPTIC_MAX_FRAMES = 64;
+export const HAPTIC_MAX_FRAMES = 32;
 export const HAPTIC_PATTERN_HEADER_LENGTH = 4;
 export const HAPTIC_FRAME_LENGTH = 3;
 

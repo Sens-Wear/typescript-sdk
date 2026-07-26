@@ -25,6 +25,13 @@ export interface GattClient {
 
 export type MaybePromise<T> = T | Promise<T>;
 
+export function encodeBoolean(value: boolean, label: string): number[] {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${label} must be a boolean.`);
+  }
+  return [value ? 1 : 0];
+}
+
 export function invokeCallback<T>(callback: (value: T) => MaybePromise<void>, value: T): void {
   const result = callback(value);
   if (result instanceof Promise) {

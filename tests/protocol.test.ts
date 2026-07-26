@@ -1,161 +1,212 @@
 import { describe, expect, it } from "vitest";
 
 import { ProtocolError } from "../src/errors";
-import { BatteryGaugeState, GAUGE_STATE_LENGTH } from "../src/modules/battery";
-import { CHARGER_STATE_LENGTH, ChargerState } from "../src/modules/charger";
-import { HAPTIC_MAX_FRAMES, HAPTIC_PATTERN_VERSION, HapticFrame, HapticPattern } from "../src/modules/haptic";
-import { LINEAR_ACCELERATION_LENGTH, LinearAccelerationSample, QUATERNION_LENGTH, QuaternionSample } from "../src/modules/imu";
-import { LED_COLOR_LENGTH, LedColor } from "../src/modules/led";
-import { TEMPERATURE_SAMPLE_LENGTH, TemperatureSample } from "../src/modules/temperature";
+import { BatteryLevel } from "../src/modules/battery";
+import { BatteryLevelStatus, ChargeLevel, ChargeState, PowerSourceState } from "../src/modules/charger";
+import { HAPTIC_MAX_FRAMES, HapticFrame, HapticPattern } from "../src/modules/haptic";
+import {
+  AccelerometerSample, Activity, ActivityEvent, ActivityTransition, Gesture, GestureEvent,
+  GyroscopeSample, ImuSensorId, QuaternionSample,
+} from "../src/modules/imu";
+import { LedColor } from "../src/modules/led";
+import { PPG_ADC_MAX, PpgSample } from "../src/modules/ppg";
+import {
+  TEMPERATURE_INTERVAL_MAX_SECONDS,
+  TemperatureMeasurement,
+  TemperatureType,
+} from "../src/modules/temperature";
+import { AdjustReason, CurrentTime, LocalTimeInformation, ReferenceTimeInformation } from "../src/modules/time";
+import { RawTouchSample, TouchGesture, TouchGestureSample, TouchState } from "../src/modules/touch";
+import * as Uuid from "../src/uuids";
 
-describe("BatteryGaugeState", () => {
-  it("decodes the firmware layout", () => {
-    const payload = new Uint8Array(GAUGE_STATE_LENGTH);
-    const view = new DataView(payload.buffer);
-    view.setInt16(0, 234, true);
-    view.setUint16(2, 3790, true);
-    view.setInt16(4, -42, true);
-    view.setInt16(6, -160, true);
-    view.setUint16(8, 870, true);
-    view.setUint16(10, 220, true);
-    view.setUint16(12, 450, true);
-    view.setUint16(14, 180, true);
-
-    const state = BatteryGaugeState.fromBytes(payload);
-
-    expect(state.temperatureDeciC).toBe(234);
-    expect(state.voltageMv).toBe(3790);
-    expect(state.averageCurrentMa).toBe(-42);
-    expect(state.averagePowerMw).toBe(-160);
-    expect(state.stateOfChargeDeciPercent).toBe(870);
-    expect(state.nominalAvailableCapacityMah).toBe(220);
-    expect(state.fullBatteryCapacityMah).toBe(450);
-    expect(state.remainingCapacityMah).toBe(180);
-    expect(state.temperatureC).toBe(23.4);
-    expect(state.stateOfChargePercent).toBe(87.0);
+describe("standard Bluetooth services", () => {
+  it("decodes Battery Level and Battery Level Status", () => {
+    expect(BatteryLevel.fromBytes([87]).percent).toBe(87);
+    const powerState = 1 | (PowerSourceState.Connected << 1) | (ChargeState.Charging << 5) |
+      (ChargeLevel.Good << 7) | (3 << 9) | (4 << 12);
+    const status = BatteryLevelStatus.fromBytes([2, powerState & 255, powerState >> 8, 87]);
+    expect(status.batteryLevelPresent).toBe(true);
+    expect(status.batteryPresent).toBe(true);
+    expect(status.wiredPower).toBe(PowerSourceState.Connected);
+    expect(status.chargeState).toBe(ChargeState.Charging);
+    expect(status.chargeLevel).toBe(ChargeLevel.Good);
+    expect(status.chargeType).toBe(3);
+    expect(status.chargingFault).toBe(4);
+    expect(() => BatteryLevel.fromBytes([101])).toThrow(RangeError);
+    expect(() => BatteryLevelStatus.fromBytes([0, 0, 0])).toThrow(ProtocolError);
   });
 
-  it("rejects wrong payload lengths and detects zero fallback", () => {
-    expect(() => BatteryGaugeState.fromBytes(new Uint8Array(GAUGE_STATE_LENGTH - 1))).toThrow(ProtocolError);
-    expect(BatteryGaugeState.fromBytes(new Uint8Array(GAUGE_STATE_LENGTH)).isZeroState).toBe(true);
-  });
-});
-
-describe("ChargerState", () => {
-  it("decodes firmware flags", () => {
-    const flags = (1 << 5) | (1 << 6) | (1 << 10) | (1 << 17);
-    const payload = new Uint8Array(CHARGER_STATE_LENGTH);
-    new DataView(payload.buffer).setUint32(0, flags, true);
-
-    const state = ChargerState.fromBytes(payload);
-
-    expect(state.flags).toBe(flags);
-    expect(state.powerGood).toBe(true);
-    expect(state.charging).toBe(true);
-    expect(state.thermalNormal).toBe(true);
-    expect(state.batteryOcpFault).toBe(true);
-    expect(state.hasFault).toBe(true);
-    expect(state.charged).toBe(false);
-    expect(state.thermalSystemFault).toBe(false);
+  it("round-trips Current Time and decodes time metadata", () => {
+    const value = new Date(Date.UTC(2026, 6, 24, 12, 34, 56, 500));
+    const current = CurrentTime.fromDate(value, AdjustReason.ExternalReference);
+    const decoded = CurrentTime.fromBytes(current.toBytes());
+    expect(decoded.value.toISOString()).toBe("2026-07-24T12:34:56.500Z");
+    expect(decoded.dayOfWeek).toBe(5);
+    expect(decoded.fractions256).toBe(128);
+    expect(decoded.adjustReason).toBe(AdjustReason.ExternalReference);
+    expect(LocalTimeInformation.fromBytes([8, 4]).utcOffsetMinutes).toBe(120);
+    expect(LocalTimeInformation.fromBytes([128, 255]).utcOffsetMinutes).toBeNull();
+    expect(ReferenceTimeInformation.fromBytes([2, 4, 1, 3]).accuracySeconds).toBe(0.5);
+    expect(ReferenceTimeInformation.fromBytes([0, 255, 255, 255]).accuracySeconds).toBeNull();
   });
 
-  it("rejects wrong payload lengths and detects zero fallback", () => {
-    expect(() => ChargerState.fromBytes(new Uint8Array(CHARGER_STATE_LENGTH - 1))).toThrow(ProtocolError);
-    const zero = ChargerState.fromBytes(new Uint8Array(CHARGER_STATE_LENGTH));
-    expect(zero.isZeroState).toBe(true);
-    expect(zero.hasFault).toBe(false);
-  });
-});
+  it("decodes the indicated Health Thermometer measurement", () => {
+    const bytes = new Uint8Array(13);
+    const view = new DataView(bytes.buffer);
+    bytes[0] = 0x06;
+    // IEEE-11073 FLOAT: mantissa 3663, exponent -2 => 36.63 C.
+    view.setUint32(1, (0xfe000000 | 3663) >>> 0, true);
+    view.setUint16(5, 2026, true);
+    bytes.set([7, 24, 12, 34, 56, TemperatureType.Body], 7);
+    const sample = TemperatureMeasurement.fromBytes(bytes);
+    expect(sample.temperatureC).toBeCloseTo(36.63);
+    expect(sample.temperatureF).toBeCloseTo(97.934);
+    expect(sample.timestamp?.toISOString()).toBe("2026-07-24T12:34:56.000Z");
+    expect(sample.type).toBe(TemperatureType.Body);
+    expect(() => TemperatureMeasurement.fromBytes(bytes.slice(0, 12))).toThrow(ProtocolError);
 
-describe("LedColor", () => {
-  it("decodes and encodes the firmware layout", () => {
-    const color = LedColor.fromBytes([0x11, 0x22, 0x33, 0x44]);
+    const invalidDate = bytes.slice();
+    invalidDate[7] = 13;
+    expect(() => TemperatureMeasurement.fromBytes(invalidDate)).toThrow(ProtocolError);
 
-    expect(color.red).toBe(0x11);
-    expect(color.green).toBe(0x22);
-    expect(color.blue).toBe(0x33);
-    expect(color.white).toBe(0x44);
-    expect(color.toInt()).toBe(0x44332211);
-    expect([...color.toBytes()]).toEqual([0x11, 0x22, 0x33, 0x44]);
-  });
-
-  it("accepts RGB and RGBW hex values", () => {
-    expect(LedColor.fromHex("#102030")).toEqual(new LedColor(0x10, 0x20, 0x30, 0));
-    expect(LedColor.fromHex("10203040")).toEqual(new LedColor(0x10, 0x20, 0x30, 0x40));
-    expect(() => LedColor.fromBytes(new Uint8Array(LED_COLOR_LENGTH - 1))).toThrow(ProtocolError);
-    expect(() => new LedColor(256, 0, 0)).toThrow(RangeError);
+    const specialValue = bytes.slice();
+    new DataView(specialValue.buffer).setUint32(1, 0x007fffff, true);
+    expect(() => TemperatureMeasurement.fromBytes(specialValue)).toThrow(ProtocolError);
+    expect(TEMPERATURE_INTERVAL_MAX_SECONDS).toBe(65_520);
   });
 });
 
-describe("HapticPattern", () => {
-  it("encodes the firmware layout", () => {
+describe("IMU protocol", () => {
+  it("decodes timestamped quaternion, accelerometer, and gyroscope samples", () => {
+    const quaternion = new Uint8Array(18);
+    const qv = new DataView(quaternion.buffer);
+    qv.setBigInt64(0, BigInt(1_725_000_000_123_456), true);
+    qv.setInt16(8, 8192, true); qv.setInt16(10, -8192, true);
+    qv.setInt16(12, 0, true); qv.setInt16(14, 16384, true); qv.setUint16(16, 1024, true);
+    const q = QuaternionSample.fromBytes(quaternion);
+    expect(q.timestampUs).toBe(BigInt(1_725_000_000_123_456));
+    expect(q.toTuple()).toEqual([0.5, -0.5, 0, 1]);
+    expect(q.accuracyRadians).toBeCloseTo(0.0625);
+
+    const vector = new Uint8Array(14);
+    const vv = new DataView(vector.buffer);
+    vv.setBigInt64(0, BigInt(99), true);
+    vv.setInt16(8, 4096, true); vv.setInt16(10, -2048, true); vv.setInt16(12, 1024, true);
+    expect(AccelerometerSample.fromBytes(vector).toTuple()).toEqual([1, -0.5, 0.25]);
+    expect(GyroscopeSample.fromBytes(vector).toTuple()).toEqual([4096, -2048, 1024]);
+  });
+
+  it("decodes gesture and activity events without hiding sensor IDs", () => {
+    const gesture = new Uint8Array(10);
+    new DataView(gesture.buffer).setBigInt64(0, BigInt(42), true);
+    gesture.set([ImuSensorId.WristGesture, Gesture.FlickIn], 8);
+    const g = GestureEvent.fromBytes(gesture);
+    expect(g.sensorId).toBe(ImuSensorId.WristGesture);
+    expect(g.gesture).toBe(Gesture.FlickIn);
+
+    const activity = new Uint8Array(11);
+    new DataView(activity.buffer).setBigInt64(0, BigInt(43), true);
+    activity.set([ImuSensorId.WearActivity, Activity.Walking, ActivityTransition.Started], 8);
+    const a = ActivityEvent.fromBytes(activity);
+    expect(a.activity).toBe(Activity.Walking);
+    expect(a.transition).toBe(ActivityTransition.Started);
+  });
+});
+
+describe("PPG and touch protocol", () => {
+  it("decodes unsigned millisecond PPG samples", () => {
+    const bytes = new Uint8Array(12);
+    const view = new DataView(bytes.buffer);
+    view.setBigUint64(0, BigInt(1_725_000_000_123), true);
+    view.setUint32(8, PPG_ADC_MAX, true);
+    const sample = PpgSample.fromBytes(bytes);
+    expect(sample.timestampMs).toBe(BigInt(1_725_000_000_123));
+    expect(sample.value).toBe(262143);
+  });
+
+  it("decodes packed and ABI-aligned touch records", () => {
+    const stateBytes = new Uint8Array(13);
+    const sv = new DataView(stateBytes.buffer);
+    sv.setBigInt64(0, BigInt(123), true); stateBytes[8] = 1;
+    sv.setUint16(9, 4095, true); sv.setUint16(11, 2048, true);
+    expect(TouchState.fromBytes(stateBytes)).toMatchObject({ touched: true, x: 4095, y: 2048 });
+
+    const gestureBytes = new Uint8Array(10);
+    new DataView(gestureBytes.buffer).setBigInt64(0, BigInt(124), true);
+    gestureBytes.set([TouchGesture.LeftSwipe, 0x61], 8);
+    expect(TouchGestureSample.fromBytes(gestureBytes)).toMatchObject({
+      gesture: TouchGesture.LeftSwipe,
+      gestureState: 0x61,
+    });
+
+    const rawBytes = new Uint8Array(16);
+    const rv = new DataView(rawBytes.buffer);
+    rv.setBigInt64(0, BigInt(125), true); rawBytes[8] = 1;
+    rv.setUint16(10, 111, true); rv.setUint16(12, 222, true); rawBytes[14] = 3;
+    expect(RawTouchSample.fromBytes(rawBytes)).toMatchObject({ touched: true, x: 111, y: 222, touchState: 3 });
+  });
+});
+
+describe("output protocols", () => {
+  it("uses firmware LED 0x00RRGGBB semantics and little-endian transport", () => {
+    const color = new LedColor(0x11, 0x22, 0x33);
+    expect(color.toInt()).toBe(0x112233);
+    expect([...color.toBytes()]).toEqual([0x33, 0x22, 0x11, 0]);
+    expect(LedColor.fromBytes([0x33, 0x22, 0x11, 0])).toEqual(color);
+    expect(LedColor.fromHex("#102030").toHex()).toBe("#102030");
+    expect(() => LedColor.fromHex("#10203040")).toThrow(TypeError);
+  });
+
+  it("encodes v1 haptic patterns and enforces the firmware's 32-frame limit", () => {
     const pattern = HapticPattern.fromFrames([[100, 255], new HapticFrame(50, 0)]);
-    const payload = pattern.toBytes();
-
-    expect([...payload]).toEqual([HAPTIC_PATTERN_VERSION, 0, 2, 0, 100, 0, 255, 50, 0, 0]);
-    expect(pattern.totalDurationMs).toBe(150);
-    expect(HapticPattern.fromBytes(payload).toDict()).toEqual(pattern.toDict());
-  });
-
-  it("rejects invalid frames and patterns", () => {
-    expect(() => new HapticFrame(0, 200)).toThrow(RangeError);
-    expect(() => new HapticFrame(100, 256)).toThrow(RangeError);
-    expect(() => HapticFrame.fromBytes([0x01, 0x02])).toThrow(ProtocolError);
-    expect(() => HapticPattern.fromFrames([])).toThrow(RangeError);
-    expect(() => HapticPattern.fromFrames(Array.from({ length: HAPTIC_MAX_FRAMES + 1 }, () => new HapticFrame(1, 1))))
+    expect([...pattern.toBytes()]).toEqual([1, 0, 2, 0, 100, 0, 255, 50, 0, 0]);
+    expect(HapticPattern.fromBytes(pattern.toBytes()).totalDurationMs).toBe(150);
+    expect(() => HapticPattern.fromFrames(Array.from({ length: HAPTIC_MAX_FRAMES + 1 }, () => [1, 1] as [number, number])))
       .toThrow(RangeError);
-    expect(() => HapticPattern.fromBytes([2, 0, 1, 0, 10, 0, 1])).toThrow(ProtocolError);
-    expect(() => HapticPattern.fromBytes([1, 0, 2, 0, 10, 0, 1])).toThrow(ProtocolError);
   });
 });
 
-describe("IMU samples", () => {
-  it("decodes quaternion samples", () => {
-    const payload = new Uint8Array(QUATERNION_LENGTH);
-    const view = new DataView(payload.buffer);
-    view.setInt16(0, 8192, true);
-    view.setInt16(2, -8192, true);
-    view.setInt16(4, 0, true);
-    view.setInt16(6, 16384, true);
-    view.setUint16(8, 1024, true);
-
-    const sample = QuaternionSample.fromBytes(payload);
-
-    expect(sample.toTuple()).toEqual([0.5, -0.5, 0, 1.0]);
-    expect(sample.toTuple({ normalized: false })).toEqual([8192, -8192, 0, 16384]);
-    expect(sample.accuracyRadians).toBeCloseTo(0.0625);
-    expect(sample.accuracyDegrees).toBeCloseTo((0.0625 * 180.0) / Math.PI);
-    expect(() => QuaternionSample.fromBytes(new Uint8Array(QUATERNION_LENGTH - 1))).toThrow(ProtocolError);
+describe("GATT endpoint registry", () => {
+  it("uses the current firmware UUIDs for PPG and touch", () => {
+    expect(Uuid.PPG_SERVICE_UUID).toBe("029ca54e-d022-4583-b483-91e9ea77034a");
+    expect(Uuid.PPG_IR_UUID).toBe("029ca552-d022-4583-b483-91e9ea77034a");
+    expect(Uuid.PPG_SAMPLING_ENABLE_UUID).toBe("029ca561-d022-4583-b483-91e9ea77034a");
+    expect(Uuid.TOUCH_SERVICE_UUID).toBe("33a5eb3f-0e13-424f-8b7a-942be0ee5cfc");
+    expect(Uuid.TOUCH_RAW_DATA_UUID).toBe("33a5eb44-0e13-424f-8b7a-942be0ee5cfc");
+    expect(Uuid.TOUCH_SAMPLING_ENABLE_UUID).toBe("33a5eb51-0e13-424f-8b7a-942be0ee5cfc");
   });
 
-  it("decodes linear acceleration samples", () => {
-    const payload = new Uint8Array(LINEAR_ACCELERATION_LENGTH);
-    const view = new DataView(payload.buffer);
-    view.setInt16(0, 4096, true);
-    view.setInt16(2, -2048, true);
-    view.setInt16(4, 1024, true);
-
-    const sample = LinearAccelerationSample.fromBytes(payload);
-
-    expect(sample.toTuple()).toEqual([1.0, -0.5, 0.25]);
-    expect(sample.toTuple({ scaled: false })).toEqual([4096, -2048, 1024]);
-    expect(() => LinearAccelerationSample.fromBytes(new Uint8Array(LINEAR_ACCELERATION_LENGTH - 1))).toThrow(ProtocolError);
-  });
-});
-
-describe("TemperatureSample", () => {
-  it("decodes positive and negative temperature samples", () => {
-    const positive = new Uint8Array(TEMPERATURE_SAMPLE_LENGTH);
-    new DataView(positive.buffer).setInt32(0, 36_625, true);
-    const negative = new Uint8Array(TEMPERATURE_SAMPLE_LENGTH);
-    new DataView(negative.buffer).setInt32(0, -1250, true);
-
-    const sample = TemperatureSample.fromBytes(positive);
-
-    expect(sample.temperatureMdegC).toBe(36_625);
-    expect(sample.temperatureC).toBe(36.625);
-    expect(sample.temperatureF).toBeCloseTo(97.925);
-    expect(TemperatureSample.fromBytes(negative).temperatureC).toBe(-1.25);
-    expect(() => TemperatureSample.fromBytes(new Uint8Array(TEMPERATURE_SAMPLE_LENGTH - 1))).toThrow(ProtocolError);
+  it("routes every current firmware characteristic to its service", () => {
+    const endpoints: Array<[string, string]> = [
+      [Uuid.BATTERY_LEVEL_UUID, Uuid.BATTERY_SERVICE_UUID],
+      [Uuid.BATTERY_LEVEL_STATUS_UUID, Uuid.BATTERY_SERVICE_UUID],
+      [Uuid.CURRENT_TIME_UUID, Uuid.CURRENT_TIME_SERVICE_UUID],
+      [Uuid.LOCAL_TIME_INFORMATION_UUID, Uuid.CURRENT_TIME_SERVICE_UUID],
+      [Uuid.REFERENCE_TIME_INFORMATION_UUID, Uuid.CURRENT_TIME_SERVICE_UUID],
+      [Uuid.TEMPERATURE_MEASUREMENT_UUID, Uuid.HEALTH_THERMOMETER_SERVICE_UUID],
+      [Uuid.TEMPERATURE_TYPE_UUID, Uuid.HEALTH_THERMOMETER_SERVICE_UUID],
+      [Uuid.MEASUREMENT_INTERVAL_UUID, Uuid.HEALTH_THERMOMETER_SERVICE_UUID],
+      [Uuid.IMU_QUATERNION_UUID, Uuid.IMU_SERVICE_UUID],
+      [Uuid.IMU_ACCELEROMETER_UUID, Uuid.IMU_SERVICE_UUID],
+      [Uuid.IMU_GYROSCOPE_UUID, Uuid.IMU_SERVICE_UUID],
+      [Uuid.IMU_GESTURE_UUID, Uuid.IMU_SERVICE_UUID],
+      [Uuid.IMU_ACTIVITY_UUID, Uuid.IMU_SERVICE_UUID],
+      [Uuid.IMU_ENABLE_UUID, Uuid.IMU_CONFIG_SERVICE_UUID],
+      [Uuid.IMU_DRAIN_PERIOD_UUID, Uuid.IMU_CONFIG_SERVICE_UUID],
+      [Uuid.PPG_RED_UUID, Uuid.PPG_SERVICE_UUID],
+      [Uuid.PPG_IR_UUID, Uuid.PPG_SERVICE_UUID],
+      [Uuid.PPG_GREEN_UUID, Uuid.PPG_SERVICE_UUID],
+      [Uuid.PPG_SAMPLING_ENABLE_UUID, Uuid.PPG_CONFIG_SERVICE_UUID],
+      [Uuid.PPG_PER_SAMPLE_IRQ_UUID, Uuid.PPG_CONFIG_SERVICE_UUID],
+      [Uuid.TOUCH_STATE_UUID, Uuid.TOUCH_SERVICE_UUID],
+      [Uuid.TOUCH_GESTURE_UUID, Uuid.TOUCH_SERVICE_UUID],
+      [Uuid.TOUCH_RAW_DATA_UUID, Uuid.TOUCH_SERVICE_UUID],
+      [Uuid.TOUCH_SAMPLING_ENABLE_UUID, Uuid.TOUCH_CONFIG_SERVICE_UUID],
+      [Uuid.LED_COLOR_UUID, Uuid.LED_SERVICE_UUID],
+      [Uuid.HAPTIC_PATTERN_UUID, Uuid.HAPTIC_SERVICE_UUID],
+    ];
+    for (const [characteristic, service] of endpoints) {
+      expect(Uuid.serviceUuidForCharacteristic(characteristic)).toBe(service);
+    }
   });
 });

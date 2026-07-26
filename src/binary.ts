@@ -48,6 +48,14 @@ export function readUint32LE(view: DataView, offset: number): number {
   return view.getUint32(offset, true);
 }
 
+export function readBigInt64LE(view: DataView, offset: number): bigint {
+  return view.getBigInt64(offset, true);
+}
+
+export function readBigUint64LE(view: DataView, offset: number): bigint {
+  return view.getBigUint64(offset, true);
+}
+
 export function writeUint16LE(value: number): Uint8Array {
   const bytes = new Uint8Array(2);
   new DataView(bytes.buffer).setUint16(0, value, true);
@@ -63,6 +71,18 @@ export function writeInt32LE(value: number): Uint8Array {
 export function writeUint32LE(value: number): Uint8Array {
   const bytes = new Uint8Array(4);
   new DataView(bytes.buffer).setUint32(0, value, true);
+  return bytes;
+}
+
+export function writeBigInt64LE(value: bigint): Uint8Array {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigInt64(0, value, true);
+  return bytes;
+}
+
+export function writeBigUint64LE(value: bigint): Uint8Array {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, value, true);
   return bytes;
 }
 

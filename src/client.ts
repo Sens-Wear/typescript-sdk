@@ -3,13 +3,16 @@ import type { Characteristic, ConnectionOptions, Device, ScanOptions, Subscripti
 
 import { base64ToBytes, bytesToBase64, type ByteInput } from "./binary";
 import { DeviceNotFoundError, NotConnectedError, ProtocolError } from "./errors";
-import { BatteryGaugeModule } from "./modules/battery";
-import { ChargerModule } from "./modules/charger";
+import { BatteryModule } from "./modules/battery";
+import { PowerStatusModule } from "./modules/charger";
 import { HapticModule } from "./modules/haptic";
 import { ImuModule } from "./modules/imu";
 import { LedModule } from "./modules/led";
+import { PpgModule } from "./modules/ppg";
 import type { NotifyCallback, NotifyOptions, WriteOptions } from "./modules/shared";
 import { TemperatureModule } from "./modules/temperature";
+import { TimeModule } from "./modules/time";
+import { TouchModule } from "./modules/touch";
 import { serviceUuidForCharacteristic } from "./uuids";
 
 export const DEFAULT_NAME_PREFIXES = ["Sens Wear", "SensWear", "SenseWear"] as const;
@@ -46,12 +49,17 @@ export class SenswearClient {
   readonly manager: BleManager;
   readonly timeoutMs: number;
   readonly namePrefixes: readonly string[];
-  readonly battery: BatteryGaugeModule;
-  readonly charger: ChargerModule;
+  readonly battery: BatteryModule;
+  readonly power: PowerStatusModule;
+  /** @deprecated Use power. */
+  readonly charger: PowerStatusModule;
   readonly haptic: HapticModule;
   readonly imu: ImuModule;
   readonly led: LedModule;
+  readonly ppg: PpgModule;
   readonly temperature: TemperatureModule;
+  readonly time: TimeModule;
+  readonly touch: TouchModule;
 
   private readonly ownsManager: boolean;
   private readonly scanServiceUUIDs: string[] | null;
@@ -72,12 +80,16 @@ export class SenswearClient {
     this.connectionOptions = options.connectionOptions;
     this.waitForPoweredOnBeforeUse = options.waitForPoweredOn ?? true;
     this.onNotificationError = options.onNotificationError;
-    this.battery = new BatteryGaugeModule(this);
-    this.charger = new ChargerModule(this);
+    this.battery = new BatteryModule(this);
+    this.power = new PowerStatusModule(this);
+    this.charger = this.power;
     this.haptic = new HapticModule(this);
     this.imu = new ImuModule(this);
     this.led = new LedModule(this);
+    this.ppg = new PpgModule(this);
     this.temperature = new TemperatureModule(this);
+    this.time = new TimeModule(this);
+    this.touch = new TouchModule(this);
   }
 
   static async discover(options: SenswearDiscoveryOptions = {}): Promise<DiscoveredDevice[]> {

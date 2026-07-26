@@ -1,236 +1,110 @@
-import { assertLength, bytesFrom, dataView, readUint32LE } from "../binary";
-import { POWER_CHARGER_STATE_UUID } from "../uuids";
+import { assertLength, bytesFrom, dataView, readUint16LE } from "../binary";
+import type { ByteInput } from "../binary";
+import { BATTERY_LEVEL_STATUS_UUID } from "../uuids";
 import type { GattClient, MaybePromise } from "./shared";
 import { invokeCallback } from "./shared";
 
-export const CHARGER_STATE_LENGTH = 4;
+export const BATTERY_LEVEL_STATUS_LENGTH = 4;
+export const BATTERY_LEVEL_PRESENT_FLAG = 1 << 1;
 
-export interface ChargerStateDict {
-  flags: number;
-  button_pressed: boolean;
-  wake1: boolean;
-  wake2: boolean;
-  shipment_mode: boolean;
-  shutdown_mode: boolean;
-  power_good: boolean;
-  charging: boolean;
-  charged: boolean;
-  thermal_regulation: boolean;
-  battery_uvlo: boolean;
-  thermal_normal: boolean;
-  thermal_warm_or_hot: boolean;
-  thermal_warm: boolean;
-  thermal_cool: boolean;
-  safety_timer_fault: boolean;
-  thermal_system_fault: boolean;
-  battery_uvlo_fault: boolean;
-  battery_ocp_fault: boolean;
-  has_fault: boolean;
+export enum PowerSourceState {
+  NotConnected = 0,
+  Connected = 1,
+  Unknown = 2,
+  Reserved = 3,
 }
 
-export class ChargerState {
-  constructor(readonly flags: number) {}
+export enum ChargeState {
+  Unknown = 0,
+  Charging = 1,
+  DischargingActive = 2,
+  DischargingInactive = 3,
+}
 
-  static fromBytes(payload: Uint8Array | ArrayBuffer | ArrayBufferView | readonly number[]): ChargerState {
+export enum ChargeLevel {
+  Unknown = 0,
+  Good = 1,
+  Low = 2,
+  Critical = 3,
+}
+
+export class BatteryLevelStatus {
+  constructor(
+    readonly flags: number,
+    readonly powerState: number,
+    readonly batteryLevel: number,
+  ) {}
+
+  static fromBytes(payload: ByteInput): BatteryLevelStatus {
     const bytes = bytesFrom(payload);
-    assertLength(bytes, CHARGER_STATE_LENGTH, "Charger");
-    return new ChargerState(readUint32LE(dataView(bytes), 0));
+    assertLength(bytes, BATTERY_LEVEL_STATUS_LENGTH, "Battery Level Status");
+    return new BatteryLevelStatus(bytes[0], readUint16LE(dataView(bytes), 1), bytes[3]);
   }
 
-  get buttonPressed(): boolean {
-    return this.bit(0);
+  get batteryLevelPresent(): boolean {
+    return Boolean(this.flags & BATTERY_LEVEL_PRESENT_FLAG);
   }
 
-  get wake1(): boolean {
-    return this.bit(1);
+  get batteryPresent(): boolean {
+    return Boolean(this.powerState & 1);
   }
 
-  get wake2(): boolean {
-    return this.bit(2);
+  get wiredPower(): PowerSourceState {
+    return (this.powerState >> 1) & 0x3;
   }
 
-  get shipmentMode(): boolean {
-    return this.bit(3);
+  get wirelessPower(): PowerSourceState {
+    return (this.powerState >> 3) & 0x3;
   }
 
-  get shutdownMode(): boolean {
-    return this.bit(4);
+  get chargeState(): ChargeState {
+    return (this.powerState >> 5) & 0x3;
   }
 
-  get powerGood(): boolean {
-    return this.bit(5);
+  get chargeLevel(): ChargeLevel {
+    return (this.powerState >> 7) & 0x3;
   }
 
-  get charging(): boolean {
-    return this.bit(6);
+  get chargeType(): number {
+    return (this.powerState >> 9) & 0x7;
   }
 
-  get charged(): boolean {
-    return this.bit(7);
+  get chargingFault(): number {
+    return (this.powerState >> 12) & 0xf;
   }
 
-  get thermalRegulation(): boolean {
-    return this.bit(8);
-  }
-
-  get batteryUvlo(): boolean {
-    return this.bit(9);
-  }
-
-  get thermalNormal(): boolean {
-    return this.bit(10);
-  }
-
-  get thermalWarmOrHot(): boolean {
-    return this.bit(11);
-  }
-
-  get thermalWarm(): boolean {
-    return this.bit(12);
-  }
-
-  get thermalCool(): boolean {
-    return this.bit(13);
-  }
-
-  get safetyTimerFault(): boolean {
-    return this.bit(14);
-  }
-
-  get thermalSystemFault(): boolean {
-    return this.bit(15);
-  }
-
-  get batteryUvloFault(): boolean {
-    return this.bit(16);
-  }
-
-  get batteryOcpFault(): boolean {
-    return this.bit(17);
-  }
-
-  get hasFault(): boolean {
-    return this.safetyTimerFault || this.thermalSystemFault || this.batteryUvloFault || this.batteryOcpFault;
-  }
-
-  get isZeroState(): boolean {
-    return this.flags === 0;
-  }
-
-  get button_pressed(): boolean {
-    return this.buttonPressed;
-  }
-
-  get shipment_mode(): boolean {
-    return this.shipmentMode;
-  }
-
-  get shutdown_mode(): boolean {
-    return this.shutdownMode;
-  }
-
-  get power_good(): boolean {
-    return this.powerGood;
-  }
-
-  get thermal_regulation(): boolean {
-    return this.thermalRegulation;
-  }
-
-  get battery_uvlo(): boolean {
-    return this.batteryUvlo;
-  }
-
-  get thermal_normal(): boolean {
-    return this.thermalNormal;
-  }
-
-  get thermal_warm_or_hot(): boolean {
-    return this.thermalWarmOrHot;
-  }
-
-  get thermal_warm(): boolean {
-    return this.thermalWarm;
-  }
-
-  get thermal_cool(): boolean {
-    return this.thermalCool;
-  }
-
-  get safety_timer_fault(): boolean {
-    return this.safetyTimerFault;
-  }
-
-  get thermal_system_fault(): boolean {
-    return this.thermalSystemFault;
-  }
-
-  get battery_uvlo_fault(): boolean {
-    return this.batteryUvloFault;
-  }
-
-  get battery_ocp_fault(): boolean {
-    return this.batteryOcpFault;
-  }
-
-  get has_fault(): boolean {
-    return this.hasFault;
-  }
-
-  get is_zero_state(): boolean {
-    return this.isZeroState;
-  }
-
-  toDict(): ChargerStateDict {
+  toDict(): Record<string, number | boolean> {
     return {
       flags: this.flags,
-      button_pressed: this.buttonPressed,
-      wake1: this.wake1,
-      wake2: this.wake2,
-      shipment_mode: this.shipmentMode,
-      shutdown_mode: this.shutdownMode,
-      power_good: this.powerGood,
-      charging: this.charging,
-      charged: this.charged,
-      thermal_regulation: this.thermalRegulation,
-      battery_uvlo: this.batteryUvlo,
-      thermal_normal: this.thermalNormal,
-      thermal_warm_or_hot: this.thermalWarmOrHot,
-      thermal_warm: this.thermalWarm,
-      thermal_cool: this.thermalCool,
-      safety_timer_fault: this.safetyTimerFault,
-      thermal_system_fault: this.thermalSystemFault,
-      battery_uvlo_fault: this.batteryUvloFault,
-      battery_ocp_fault: this.batteryOcpFault,
-      has_fault: this.hasFault,
+      power_state: this.powerState,
+      battery_level: this.batteryLevel,
+      battery_level_present: this.batteryLevelPresent,
+      battery_present: this.batteryPresent,
+      wired_power: this.wiredPower,
+      wireless_power: this.wirelessPower,
+      charge_state: this.chargeState,
+      charge_level: this.chargeLevel,
+      charge_type: this.chargeType,
+      charging_fault: this.chargingFault,
     };
-  }
-
-  to_dict(): ChargerStateDict {
-    return this.toDict();
-  }
-
-  private bit(bit: number): boolean {
-    return Boolean(this.flags & (1 << bit));
   }
 }
 
-export type ChargerStateCallback = (state: ChargerState) => MaybePromise<void>;
+export type BatteryLevelStatusCallback = (status: BatteryLevelStatus) => MaybePromise<void>;
 
-export class ChargerModule {
-  readonly characteristicUuid = POWER_CHARGER_STATE_UUID;
+export class PowerStatusModule {
+  readonly characteristicUuid = BATTERY_LEVEL_STATUS_UUID;
 
   constructor(private readonly client: GattClient) {}
 
-  async read(): Promise<ChargerState> {
-    const payload = await this.client.readGattChar(this.characteristicUuid);
-    return ChargerState.fromBytes(payload);
+  async read(): Promise<BatteryLevelStatus> {
+    return BatteryLevelStatus.fromBytes(await this.client.readGattChar(this.characteristicUuid));
   }
 
-  async subscribe(callback: ChargerStateCallback): Promise<void> {
+  async subscribe(callback: BatteryLevelStatusCallback): Promise<void> {
     await this.unsubscribe();
     await this.client.startNotify(this.characteristicUuid, (_sender, data) => {
-      invokeCallback(callback, ChargerState.fromBytes(data));
+      invokeCallback(callback, BatteryLevelStatus.fromBytes(data));
     });
   }
 
@@ -238,3 +112,9 @@ export class ChargerModule {
     await this.client.stopNotify(this.characteristicUuid);
   }
 }
+
+/** @deprecated Use BatteryLevelStatus. */
+export { BatteryLevelStatus as ChargerState };
+/** @deprecated Use PowerStatusModule or client.power. */
+export { PowerStatusModule as ChargerModule };
+export const CHARGER_STATE_LENGTH = BATTERY_LEVEL_STATUS_LENGTH;

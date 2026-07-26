@@ -1,6 +1,6 @@
 {
   "name": "senswear",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "TypeScript SDK for connecting to SensWear hardware from React Native over BLE.",
   "keywords": [
     "senswear",

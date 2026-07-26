@@ -1,117 +1,151 @@
-import { assertLength, bytesFrom, dataView, readInt32LE, writeUint16LE } from "../binary";
-import {
-  TEMPERATURE_SAMPLE_UUID,
-  TEMPERATURE_SAMPLING_RATE_UUID,
-  TEMPERATURE_TRANSFER_INTERVAL_UUID,
-} from "../uuids";
+import { bytesFrom, dataView, readUint16LE, readUint32LE, writeUint16LE } from "../binary";
+import type { ByteInput } from "../binary";
+import { ProtocolError } from "../errors";
+import { MEASUREMENT_INTERVAL_UUID, TEMPERATURE_MEASUREMENT_UUID, TEMPERATURE_TYPE_UUID } from "../uuids";
 import type { GattClient, MaybePromise } from "./shared";
 import { invokeCallback } from "./shared";
 
-export const TEMPERATURE_SAMPLE_LENGTH = 4;
+export const TEMPERATURE_INTERVAL_RESOLUTION_SECONDS = 60;
+export const TEMPERATURE_INTERVAL_MAX_SECONDS =
+  Math.floor(0xffff / TEMPERATURE_INTERVAL_RESOLUTION_SECONDS) *
+  TEMPERATURE_INTERVAL_RESOLUTION_SECONDS;
 
-export interface TemperatureSampleDict {
-  temperature_mdeg_c: number;
-  temperature_c: number;
-  temperature_f: number;
+export enum TemperatureType {
+  Armpit = 1,
+  Body = 2,
+  Ear = 3,
+  Finger = 4,
+  GastrointestinalTract = 5,
+  Mouth = 6,
+  Rectum = 7,
+  Toe = 8,
+  Tympanum = 9,
 }
 
-export class TemperatureSample {
-  constructor(readonly temperatureMdegC: number) {}
+export class TemperatureMeasurement {
+  constructor(
+    readonly temperatureC: number,
+    readonly timestamp: Date | null,
+    readonly type: TemperatureType | null,
+    readonly flags: number,
+  ) {}
 
-  static fromBytes(payload: Uint8Array | ArrayBuffer | ArrayBufferView | readonly number[]): TemperatureSample {
+  static fromBytes(payload: ByteInput): TemperatureMeasurement {
     const bytes = bytesFrom(payload);
-    assertLength(bytes, TEMPERATURE_SAMPLE_LENGTH, "Temperature");
-    return new TemperatureSample(readInt32LE(dataView(bytes), 0));
-  }
+    if (bytes.length < 5) {
+      throw new ProtocolError(`Temperature Measurement payload must be at least 5 bytes, got ${bytes.length}.`);
+    }
+    const flags = bytes[0];
+    let offset = 5;
+    let temperature = decodeIeee11073Float(readUint32LE(dataView(bytes), 1));
+    if (flags & 1) {
+      temperature = (temperature - 32) * 5 / 9;
+    }
 
-  static from_bytes(payload: Uint8Array | ArrayBuffer | ArrayBufferView | readonly number[]): TemperatureSample {
-    return TemperatureSample.fromBytes(payload);
-  }
+    let timestamp: Date | null = null;
+    if (flags & 2) {
+      if (bytes.length < offset + 7) {
+        throw new ProtocolError("Temperature Measurement timestamp is truncated.");
+      }
+      const year = readUint16LE(dataView(bytes), offset);
+      const month = bytes[offset + 2];
+      const day = bytes[offset + 3];
+      const hour = bytes[offset + 4];
+      const minute = bytes[offset + 5];
+      const second = bytes[offset + 6];
+      timestamp = new Date(0);
+      timestamp.setUTCFullYear(year, month - 1, day);
+      timestamp.setUTCHours(hour, minute, second, 0);
+      if (
+        !Number.isFinite(timestamp.getTime()) ||
+        timestamp.getUTCFullYear() !== year ||
+        timestamp.getUTCMonth() !== month - 1 ||
+        timestamp.getUTCDate() !== day ||
+        timestamp.getUTCHours() !== hour ||
+        timestamp.getUTCMinutes() !== minute ||
+        timestamp.getUTCSeconds() !== second
+      ) {
+        throw new ProtocolError("Temperature Measurement timestamp is invalid.");
+      }
+      offset += 7;
+    }
 
-  get temperatureC(): number {
-    return this.temperatureMdegC / 1000.0;
+    let type: TemperatureType | null = null;
+    if (flags & 4) {
+      if (bytes.length < offset + 1) {
+        throw new ProtocolError("Temperature Measurement type is missing.");
+      }
+      type = bytes[offset] as TemperatureType;
+      offset += 1;
+    }
+    if (bytes.length !== offset) {
+      throw new ProtocolError(`Temperature Measurement has ${bytes.length - offset} unexpected trailing byte(s).`);
+    }
+    return new TemperatureMeasurement(temperature, timestamp, type, flags);
   }
 
   get temperatureF(): number {
-    return (this.temperatureC * 9.0) / 5.0 + 32.0;
-  }
-
-  get temperature_mdeg_c(): number {
-    return this.temperatureMdegC;
-  }
-
-  get temperature_c(): number {
-    return this.temperatureC;
-  }
-
-  get temperature_f(): number {
-    return this.temperatureF;
-  }
-
-  toDict(): TemperatureSampleDict {
-    return {
-      temperature_mdeg_c: this.temperatureMdegC,
-      temperature_c: this.temperatureC,
-      temperature_f: this.temperatureF,
-    };
-  }
-
-  to_dict(): TemperatureSampleDict {
-    return this.toDict();
+    return this.temperatureC * 9 / 5 + 32;
   }
 }
 
-export type TemperatureCallback = (sample: TemperatureSample) => MaybePromise<void>;
+export type TemperatureCallback = (sample: TemperatureMeasurement) => MaybePromise<void>;
 
 export class TemperatureModule {
-  readonly sampleUuid = TEMPERATURE_SAMPLE_UUID;
-  readonly samplingRateUuid = TEMPERATURE_SAMPLING_RATE_UUID;
-  readonly transferIntervalUuid = TEMPERATURE_TRANSFER_INTERVAL_UUID;
+  readonly measurementUuid = TEMPERATURE_MEASUREMENT_UUID;
 
   constructor(private readonly client: GattClient) {}
 
-  async read(): Promise<TemperatureSample> {
-    const payload = await this.client.readGattChar(this.sampleUuid);
-    return TemperatureSample.fromBytes(payload);
+  async readTemperatureType(): Promise<TemperatureType> {
+    const bytes = bytesFrom(await this.client.readGattChar(TEMPERATURE_TYPE_UUID));
+    if (bytes.length !== 1) throw new ProtocolError("Temperature Type payload must be 1 byte.");
+    return bytes[0] as TemperatureType;
   }
 
-  async setSamplingRateHz(samplingRateHz: number, options: { response?: boolean } = {}): Promise<void> {
-    const payload = packUint16Nonzero(samplingRateHz, "samplingRateHz");
-    await this.client.writeGattChar(this.samplingRateUuid, payload, {
+  async readMeasurementInterval(): Promise<number> {
+    const bytes = bytesFrom(await this.client.readGattChar(MEASUREMENT_INTERVAL_UUID));
+    if (bytes.length !== 2) throw new ProtocolError("Measurement Interval payload must be 2 bytes.");
+    return readUint16LE(dataView(bytes), 0);
+  }
+
+  async setMeasurementInterval(seconds: number, options: { response?: boolean } = {}): Promise<void> {
+    if (!Number.isInteger(seconds) || seconds < 0 || seconds > TEMPERATURE_INTERVAL_MAX_SECONDS) {
+      throw new RangeError("seconds must be an integer between 0 and 65520.");
+    }
+    if (seconds % TEMPERATURE_INTERVAL_RESOLUTION_SECONDS !== 0) {
+      throw new RangeError("seconds must be 0 or a whole-minute multiple of 60.");
+    }
+    await this.client.writeGattChar(MEASUREMENT_INTERVAL_UUID, writeUint16LE(seconds), {
       response: options.response ?? true,
     });
-  }
-
-  async set_sampling_rate_hz(samplingRateHz: number, options: { response?: boolean } = {}): Promise<void> {
-    await this.setSamplingRateHz(samplingRateHz, options);
-  }
-
-  async setTransferInterval(transferInterval: number, options: { response?: boolean } = {}): Promise<void> {
-    const payload = packUint16Nonzero(transferInterval, "transferInterval");
-    await this.client.writeGattChar(this.transferIntervalUuid, payload, {
-      response: options.response ?? true,
-    });
-  }
-
-  async set_transfer_interval(transferInterval: number, options: { response?: boolean } = {}): Promise<void> {
-    await this.setTransferInterval(transferInterval, options);
   }
 
   async subscribe(callback: TemperatureCallback): Promise<void> {
     await this.unsubscribe();
-    await this.client.startNotify(this.sampleUuid, (_sender, data) => {
-      invokeCallback(callback, TemperatureSample.fromBytes(data));
+    await this.client.startNotify(this.measurementUuid, (_sender, data) => {
+      invokeCallback(callback, TemperatureMeasurement.fromBytes(data));
     });
   }
 
   async unsubscribe(): Promise<void> {
-    await this.client.stopNotify(this.sampleUuid);
+    await this.client.stopNotify(this.measurementUuid);
   }
 }
 
-function packUint16Nonzero(value: number, name: string): Uint8Array {
-  if (!Number.isInteger(value) || value < 1 || value > 0xffff) {
-    throw new RangeError(`${name} must be an integer between 1 and 65535.`);
+function decodeIeee11073Float(raw: number): number {
+  const encodedMantissa = raw & 0x00ffffff;
+  if ([0x007ffffe, 0x00800002, 0x007fffff, 0x00800000, 0x00800001].includes(encodedMantissa)) {
+    throw new ProtocolError(
+      `Unsupported IEEE-11073 special temperature value 0x${raw.toString(16).padStart(8, "0")}.`,
+    );
   }
-  return writeUint16LE(value);
+  let mantissa = encodedMantissa;
+  if (mantissa & 0x00800000) mantissa -= 0x01000000;
+  let exponent = (raw >>> 24) & 0xff;
+  if (exponent & 0x80) exponent -= 0x100;
+  return mantissa * 10 ** exponent;
 }
+
+/** @deprecated Use TemperatureMeasurement. */
+export { TemperatureMeasurement as TemperatureSample };
+export const TEMPERATURE_SAMPLE_LENGTH = 13;
