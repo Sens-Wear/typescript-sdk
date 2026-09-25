@@ -9,7 +9,7 @@ import {
   IMU_GESTURE_UUID, IMU_GYROSCOPE_UUID, IMU_QUATERNION_UUID,
 } from "../uuids";
 import type { GattClient, MaybePromise } from "./shared";
-import { encodeBoolean, invokeCallback } from "./shared";
+import { encodeBoolean, invokeCallback, requireWriteResponse } from "./shared";
 
 export const QUATERNION_LENGTH = 18;
 export const VECTOR_SAMPLE_LENGTH = 14;
@@ -180,7 +180,7 @@ export class ImuModule {
   }
   async setEnabled(enabled: boolean, options: { response?: boolean } = {}): Promise<void> {
     await this.client.writeGattChar(IMU_ENABLE_UUID, encodeBoolean(enabled, "enabled"), {
-      response: options.response ?? true,
+      response: requireWriteResponse(options.response),
     });
   }
   async arePhysicalStreamsEnabled(): Promise<boolean> {
@@ -201,7 +201,7 @@ export class ImuModule {
     if (!Number.isInteger(milliseconds) || milliseconds < 1 || milliseconds > 0xffffffff) {
       throw new RangeError("milliseconds must be an integer between 1 and 4294967295.");
     }
-    await this.client.writeGattChar(IMU_DRAIN_PERIOD_UUID, writeUint32LE(milliseconds), { response: options.response ?? true });
+    await this.client.writeGattChar(IMU_DRAIN_PERIOD_UUID, writeUint32LE(milliseconds), { response: requireWriteResponse(options.response) });
   }
 
   async subscribeQuaternion(callback: (sample: QuaternionSample) => MaybePromise<void>): Promise<void> {

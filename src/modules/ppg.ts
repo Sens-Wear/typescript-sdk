@@ -5,7 +5,7 @@ import {
   PPG_GREEN_UUID, PPG_IR_UUID, PPG_PER_SAMPLE_IRQ_UUID, PPG_RED_UUID, PPG_SAMPLING_ENABLE_UUID,
 } from "../uuids";
 import type { GattClient, MaybePromise } from "./shared";
-import { encodeBoolean, invokeCallback } from "./shared";
+import { encodeBoolean, invokeCallback, requireWriteResponse } from "./shared";
 
 export const PPG_SAMPLE_LENGTH = 12;
 export const PPG_ADC_MAX = 262143;
@@ -39,7 +39,7 @@ export class PpgModule {
   }
   async setSamplingEnabled(enabled: boolean, options: { response?: boolean } = {}): Promise<void> {
     await this.client.writeGattChar(PPG_SAMPLING_ENABLE_UUID, encodeBoolean(enabled, "enabled"), {
-      response: options.response ?? true,
+      response: requireWriteResponse(options.response),
     });
   }
   async isPerSampleIrqEnabled(): Promise<boolean> {
@@ -47,7 +47,7 @@ export class PpgModule {
   }
   async setPerSampleIrqEnabled(enabled: boolean, options: { response?: boolean } = {}): Promise<void> {
     await this.client.writeGattChar(PPG_PER_SAMPLE_IRQ_UUID, encodeBoolean(enabled, "enabled"), {
-      response: options.response ?? true,
+      response: requireWriteResponse(options.response),
     });
   }
 

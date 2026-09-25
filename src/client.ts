@@ -5,6 +5,7 @@ import { base64ToBytes, bytesToBase64, type ByteInput } from "./binary";
 import { DeviceNotFoundError, NotConnectedError, ProtocolError } from "./errors";
 import { BatteryModule } from "./modules/battery";
 import { PowerStatusModule } from "./modules/charger";
+import { DeviceInfoModule } from "./modules/deviceInfo";
 import { HapticModule } from "./modules/haptic";
 import { ImuModule } from "./modules/imu";
 import { LedModule } from "./modules/led";
@@ -15,7 +16,7 @@ import { TimeModule } from "./modules/time";
 import { TouchModule } from "./modules/touch";
 import { serviceUuidForCharacteristic } from "./uuids";
 
-export const DEFAULT_NAME_PREFIXES = ["Sens Wear", "SensWear", "SenseWear"] as const;
+export const DEFAULT_NAME_PREFIXES = ["Sens Wear", "SensWear"] as const;
 
 export interface DiscoveredDevice {
   id: string;
@@ -50,6 +51,7 @@ export class SenswearClient {
   readonly timeoutMs: number;
   readonly namePrefixes: readonly string[];
   readonly battery: BatteryModule;
+  readonly deviceInfo: DeviceInfoModule;
   readonly power: PowerStatusModule;
   /** @deprecated Use power. */
   readonly charger: PowerStatusModule;
@@ -81,6 +83,7 @@ export class SenswearClient {
     this.waitForPoweredOnBeforeUse = options.waitForPoweredOn ?? true;
     this.onNotificationError = options.onNotificationError;
     this.battery = new BatteryModule(this);
+    this.deviceInfo = new DeviceInfoModule(this);
     this.power = new PowerStatusModule(this);
     this.charger = this.power;
     this.haptic = new HapticModule(this);

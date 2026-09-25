@@ -5,9 +5,34 @@ TypeScript SDK for SensWear devices in React Native applications. It uses
 firmware-compatible interfaces for battery and charging state, clock synchronization,
 temperature, IMU, PPG, touch, RGB LED, and haptic output.
 
-This document describes SDK version **0.2.0** and the current firmware protocol. It explains
+This document describes SDK version **0.4.0** and the current firmware protocol. It explains
 both the convenient TypeScript API and the exact values transported over Bluetooth, so it can
 also be used when integrating another BLE stack.
+
+## Changes in 0.4.0
+
+`client.deviceInfo` reads the real firmware revision and compiled daughter-board
+and feature flags. These new read-only endpoints leave existing sensor/actuator
+payloads unchanged. Older firmware that omits them raises its GATT error; the
+SDK does not invent a version or infer shields from advertised services.
+
+## Changes in 0.3.0
+
+The touch API documents the current 15-electrode linear strip and adds nullable
+`positionNormalized` / `positionMm` helpers. Existing UUIDs, packet sizes, `x`/`y`
+fields, gesture enums and compatibility aliases are unchanged. Old 2D packets are
+still decoded without clamping; slider helpers return `null` for nonzero Y or X
+outside the current strip range. The conversion requires the current slider firmware.
+
+Temperature interval indications now have `subscribeMeasurementInterval()` and
+`unsubscribeMeasurementInterval()` methods; `unsubscribeAll()` removes both
+temperature monitors. Existing `temperature.unsubscribe()` removes measurement
+indications only.
+
+Typed time, temperature, IMU, PPG, touch and haptic writes now reject
+`{ response: false }`, because those firmware characteristics advertise only Write.
+Omit that option or use `true`. LED still supports Write Without Response, and the
+low-level `writeGattChar()` remains available for other firmware and raw operations.
 
 ## Installation
 
@@ -53,6 +78,7 @@ the SDK never destroys it.
 
 | Property | Capability |
 |---|---|
+| `deviceInfo` | Firmware revision and compiled shields/features |
 | `battery` | Battery percentage |
 | `power` | Battery presence, external power, charging state, charge level, faults |
 | `time` | Read/set device UTC clock and read time metadata |
@@ -65,12 +91,58 @@ the SDK never destroys it.
 
 `client.charger` remains as a deprecated alias for `client.power`.
 
+### Firmware revision and capabilities
+
+```ts
+import { DaughterBoard, DeviceFeature } from "senswear";
+
+const info = await client.deviceInfo.read();
+console.log(info.firmwareVersion);
+console.log(info.capabilities.shields); // known DaughterBoard flags
+if (info.capabilities.hasFeature(DeviceFeature.Ppg)) {
+  const sample = await client.ppg.readRed();
+}
+console.log(info.capabilities.hasShield(DaughterBoard.Touch));
+```
+
+`readFirmwareVersion()` and `readCapabilities()` are also available separately.
+`firmwareVersion` is the UTF-8 application version from the running firmware's
+`VERSION` file, read from Device Information Service `180a`, characteristic
+`2a26` (Read). This is independent of the SDK version. Invalid UTF-8, empty
+revisions, and NUL bytes raise `ProtocolError`.
+
+Capabilities use service `9b8e0001-6b7d-4e9f-9b0d-2d7f6e5a4c30`, characteristic
+`9b8e0002-6b7d-4e9f-9b0d-2d7f6e5a4c30` (Read only). The exact packet is 9 bytes,
+packed without padding; multibyte integers are unsigned little-endian. There
+are no timestamps, units, or scale factors.
+
+| Offset | Field | Wire type | Meaning |
+|---|---|---|---|
+| 0 | `protocolVersion` | uint8 | Schema version, currently 1 |
+| 1 | `shieldMask` | uint32 | Compiled daughter-board shield flags |
+| 5 | `featureMask` | uint32 | Firmware data/control feature flags |
+
+`DaughterBoard` flags: `Haptic=1`, `Ppg=2`, `Temperature=4`, `Touch=8`.
+`DeviceFeature` flags: `Imu=1`, `Led=2`, `Haptic=4`, `Ppg=8`, `Temperature=16`,
+`Touch=32`, `Battery=64`, `Time=128`. Use feature flags to gate navigation or
+operations. These values describe the firmware build, not physical attachment,
+sensor health, or whether sampling is currently enabled. The PPG application
+preset enables the temperature shield too and sets both shield bits.
+
+`DeviceCapabilities.fromBytes()` accepts the standard SDK byte inputs and
+rejects incorrect lengths or unsupported schema versions with `ProtocolError`.
+All raw mask bits survive parsing; `unknownShieldMask` and `unknownFeatureMask`
+expose future flags as unsigned numbers. `shields` lists known flags only.
+`hasShield()` and `hasFeature()` accept flag combinations and require all
+requested bits. No metadata is cached across connections. See the React Native
+[usage example](examples/readDeviceInfo.ts).
+
 ### Discovery and connection
 
 ```ts
 const found = await SenswearClient.discover({
   timeoutMs: 7_500,
-  namePrefixes: ["Sens Wear", "SensWear", "SenseWear"],
+  namePrefixes: ["Sens Wear", "SensWear"],
 });
 
 const client = new SenswearClient(found[0].id, {
@@ -147,7 +219,8 @@ Current Time and temperature timestamps are standard BLE calendar values interpr
 | gyroscope | raw firmware/BHI sample units |
 | temperature | °C; °F convenience property also provided |
 | PPG value | raw 18-bit ADC count |
-| touch x/y | 12-bit controller coordinate |
+| touch x | current linear shield: 0..896, 64 units per 3 mm electrode pitch |
+| touch y | reserved zero on the current linear shield |
 | IMU drain period | milliseconds |
 | temperature interval | seconds |
 | haptic duration | milliseconds |
@@ -299,8 +372,18 @@ await client.temperature.subscribe((sample) => {
 
 const type = await client.temperature.readTemperatureType();
 const interval = await client.temperature.readMeasurementInterval();
+await client.temperature.subscribeMeasurementInterval((seconds) => {
+  console.log("Interval changed:", seconds);
+});
 await client.temperature.setMeasurementInterval(300);
+// Removes both measurement and interval monitors:
+await client.temperature.unsubscribeAll();
 ```
+
+Interval indications contain a two-byte little-endian unsigned number of seconds.
+`unsubscribeMeasurementInterval()` removes only that monitor; `unsubscribe()`
+continues to remove temperature measurement indications only. The native BLE
+transport selects indications automatically from the characteristic properties.
 
 `setMeasurementInterval(seconds)` accepts values the firmware can represent exactly:
 
@@ -484,70 +567,117 @@ Data and configuration services end in `...a54e...` and `...a560...`, respective
 
 ## Touch
 
+The SensWear touch shield has 15 electrodes in one row. Firmware reads all channels
+and computes position and gestures on the host. X increases from the connector
+toward the tip; Y is retained in packets as a reserved zero field.
+
 ```ts
-await client.touch.setSamplingEnabled(true);
-console.log(await client.touch.isSamplingEnabled());
+import { TOUCH_POSITION_MAX, TOUCH_LENGTH_MM } from "senswear";
 
 await client.touch.subscribeState((state) => {
-  if (state.touched) console.log(state.x, state.y);
+  if (state.positionNormalized !== null) {
+    console.log(state.x, state.positionNormalized, state.positionMm);
+  }
 });
-```
-
-Coordinates are 12-bit controller coordinates, normally 0–4095. They are sensor coordinates,
-not screen pixels; map/rotate them according to the device mounting and UI. Firmware reports
-x/y as zero when not touched.
-
-### Normalized gestures
-
-```ts
 await client.touch.subscribeGesture((event) => {
   console.log(event.gesture, event.gestureState);
 });
+await client.touch.subscribeRaw((sample) => {
+  // Use sample.touched for contact; touchState is a native controller diagnostic.
+  console.log(sample.touched, sample.touchState);
+});
+await client.touch.setSamplingEnabled(true);
+console.log(await client.touch.isSamplingEnabled());
+// ... later, when the application no longer needs acquisition:
+await client.touch.setSamplingEnabled(false);
+await client.touch.unsubscribeAll();
 ```
 
-`gesture` is the stable application value:
+Sampling starts disabled. Subscribing does not enable it. Stopping sampling puts
+the controller in standby while leaving its supply powered; restarting resets
+host gesture tracking. Idle frames need not produce notifications. Read methods
+return the latest cached records, which may predate the current subscription or
+be all zero before acquisition. Notifications are best-effort: transport congestion
+may drop position and gesture events rather than block acquisition.
 
-| Value | Meaning |
-|---:|---|
-| 0 | none |
-| 1 | single click |
-| 2 | click and hold |
-| 3 | double click |
-| 4/5 | swipe down / swipe down and hold |
-| 6/7 | swipe right / swipe right and hold |
-| 8/9 | swipe up / swipe up and hold |
-| 10/11 | swipe left / swipe left and hold |
+### Linear position
 
-`gestureState` retains the controller register for diagnostics. Current raw codes are `0x00`,
-`0x10`, `0x11`, `0x20`, `0x31`, `0x32`, `0x41`, `0x42`, `0x51`, `0x52`, `0x61`, `0x62`.
-Applications should branch on normalized `gesture`.
+Both `TouchState` and `RawTouchSample` expose these values:
 
-### Raw state
-
-`subscribeRaw()` exposes `RawTouchSample`: timestamp, touched, x, y, and the controller's
-raw `touchState` byte. Use this for diagnostics or controller-specific behavior; normal apps
-should prefer state and gesture.
-
-Use `unsubscribeState()`, `unsubscribeGesture()`, `unsubscribeRaw()`, or `unsubscribeAll()`
-to stop monitors. `TouchGestureEvent`, `TouchRawState`, `isEnabled()`, and `setEnabled()` are
-retained as deprecated compatibility aliases.
-
-Wire layouts:
-
-| Data | Layout | Size |
-|---|---|---:|
-| touch state | `<q?HH>` packed | 13 |
-| gesture | `<qBB>` | 10 |
-| raw state | ABI-aligned: timestamp at 0, bool at 8, pad at 9, x at 10, y at 12, state at 14, pad at 15 | 16 |
-
-The raw-state padding is part of the current firmware ABI and is intentionally parsed.
-
-| Characteristic | UUID suffix |
+| Field/helper | Meaning |
 |---|---|
-| state | `...eb42` |
-| gesture | `...eb43` |
-| raw | `...eb44` |
-| enable | `...eb51` |
+| `timestampUs` | Signed 64-bit Unix microseconds, preserved as `bigint` |
+| `timestamp` | Convenience `Date`; loses sub-millisecond precision |
+| `touched` | Host-decoded contact presence |
+| `x` | Unsigned coordinate, 0..896 across the current strip |
+| `y` | Reserved zero in current firmware |
+| `positionNormalized` | `x / 896`, or `null` for release/non-slider data |
+| `positionMm` | `x * 3 / 64` mm from the first pad center, or `null` |
+
+Pad centers are `0, 64, 128, ..., 896`; adjacent centers are 3 mm apart, spanning
+42 mm from first to last center. Firmware already accounts for physical wiring,
+including the swapped RX1/RX2 channels; applications must not swap them again.
+Nominal millimeters use PCB pitch and do not imply calibrated touch accuracy.
+Finger size, overlay and interpolation affect the result. Both coordinates are
+zero when released; `touched=true, x=0` is a valid touch at the connector end.
+
+Exported geometry constants are `TOUCH_ELECTRODE_COUNT=15`,
+`TOUCH_ELECTRODE_PITCH=64`, `TOUCH_ELECTRODE_PITCH_MM=3`,
+`TOUCH_POSITION_MAX=896`, and `TOUCH_LENGTH_MM=42`.
+The nullable helpers require a touch, integer X in range, and Y=0. They leave
+legacy/diagnostic packet fields unchanged instead of clamping or rejecting them.
+
+### Host gestures
+
+`gesture` is the normalized application value. `gestureState` carries the existing
+MTCH6102 numeric encoding generated by the host decoder, not a native gesture
+register read. Unknown values remain available as numbers.
+
+| `TouchGesture` value | Meaning | `gestureState` |
+|---:|---|---:|
+| 0 | none | `0x00` |
+| 1 | single click | `0x10` |
+| 2 | click and hold | `0x11` |
+| 3 | double click | `0x20` |
+| 6 / 7 | right swipe / swipe and hold, toward the tip | `0x41` / `0x42` |
+| 10 / 11 | left swipe / swipe and hold, toward the connector | `0x61` / `0x62` |
+
+Legacy down values 4/5 (`0x31`/`0x32`) and up values 8/9 (`0x51`/`0x52`) stay
+in the enum for compatibility; the linear firmware does not generate them.
+Default host timing is 500 ms for hold, 250 ms for the double-tap window, and
+320 ms stationary after a swipe for swipe-and-hold. Single taps wait for the
+double-tap window before emission.
+
+### Raw state and wire compatibility
+
+The characteristic called raw touch data contains decoded position plus the
+native `touchState` diagnostic byte. It does not contain the 15 electrode signals
+or ADC measurements. Hardware TCH in that byte can disagree with host `touched`
+on this one-dimensional board; use `touched` for application contact state.
+
+`readState()`, `readGesture()` and `readRaw()` share parsers with their corresponding
+subscriptions. Use `unsubscribeState()`, `unsubscribeGesture()`, `unsubscribeRaw()`
+or `unsubscribeAll()` to stop monitors. Deprecated `TouchGestureEvent`,
+`TouchRawState`, `isEnabled()` and `setEnabled()` aliases remain available.
+
+All multibyte fields are little-endian. The unchanged layouts are:
+
+| Data | Byte offsets | Size |
+|---|---|---:|
+| state | signed timestamp 0..7, bool 8, uint16 X 9..10, uint16 Y 11..12 | 13 |
+| gesture | signed timestamp 0..7, uint8 gesture 8, uint8 gestureState 9 | 10 |
+| raw | signed timestamp 0..7, bool 8, padding 9, uint16 X 10..11, uint16 Y 12..13, uint8 touchState 14, padding 15 | 16 |
+
+Padding is ignored; exact packet lengths and boolean encodings are validated.
+The service UUID is `33a5eb3f-0e13-424f-8b7a-942be0ee5cfc`; configuration uses
+`33a5eb50-0e13-424f-8b7a-942be0ee5cfc`.
+
+| Characteristic | UUID prefix (remaining fields as service) | Properties |
+|---|---|---|
+| state | `33a5eb42` | Read, Notify |
+| gesture | `33a5eb43` | Read, Notify |
+| raw | `33a5eb44` | Read, Notify |
+| sampling enable | `33a5eb51` | Read, Write; one byte 0/1 |
 
 ## RGB LED
 

@@ -2,7 +2,7 @@ import { assertLength, bytesFrom, dataView, readUint16LE } from "../binary";
 import type { ByteInput } from "../binary";
 import { CURRENT_TIME_UUID, LOCAL_TIME_INFORMATION_UUID, REFERENCE_TIME_INFORMATION_UUID } from "../uuids";
 import type { GattClient, MaybePromise } from "./shared";
-import { invokeCallback } from "./shared";
+import { invokeCallback, requireWriteResponse } from "./shared";
 
 export const CURRENT_TIME_LENGTH = 10;
 export const LOCAL_TIME_INFORMATION_LENGTH = 2;
@@ -112,7 +112,7 @@ export class TimeModule {
     if (current.value.getTime() < Date.UTC(2020, 0, 1)) {
       throw new RangeError("Firmware accepts Current Time values from 2020-01-01 onward.");
     }
-    await this.client.writeGattChar(CURRENT_TIME_UUID, current.toBytes(), { response: options.response ?? true });
+    await this.client.writeGattChar(CURRENT_TIME_UUID, current.toBytes(), { response: requireWriteResponse(options.response) });
   }
 
   async readLocalInformation(): Promise<LocalTimeInformation> {

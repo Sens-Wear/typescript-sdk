@@ -25,6 +25,17 @@ export interface GattClient {
 
 export type MaybePromise<T> = T | Promise<T>;
 
+/** Typed endpoints that advertise WRITE require an acknowledged GATT request. */
+export function requireWriteResponse(response: boolean | undefined): true {
+  if (response !== undefined && typeof response !== "boolean") {
+    throw new TypeError("response must be a boolean.");
+  }
+  if (response === false) {
+    throw new RangeError("This characteristic requires a write with response.");
+  }
+  return true;
+}
+
 export function encodeBoolean(value: boolean, label: string): number[] {
   if (typeof value !== "boolean") {
     throw new TypeError(`${label} must be a boolean.`);

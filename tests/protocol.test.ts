@@ -16,7 +16,11 @@ import {
   TemperatureType,
 } from "../src/modules/temperature";
 import { AdjustReason, CurrentTime, LocalTimeInformation, ReferenceTimeInformation } from "../src/modules/time";
-import { RawTouchSample, TouchGesture, TouchGestureSample, TouchState } from "../src/modules/touch";
+import {
+  RawTouchSample, TouchGesture, TouchGestureSample, TouchState,
+  TOUCH_ELECTRODE_COUNT, TOUCH_ELECTRODE_PITCH, TOUCH_ELECTRODE_PITCH_MM,
+  TOUCH_POSITION_MAX, TOUCH_LENGTH_MM,
+} from "../src/modules/touch";
 import * as Uuid from "../src/uuids";
 
 describe("standard Bluetooth services", () => {
@@ -144,6 +148,69 @@ describe("PPG and touch protocol", () => {
     rv.setBigInt64(0, BigInt(125), true); rawBytes[8] = 1;
     rv.setUint16(10, 111, true); rv.setUint16(12, 222, true); rawBytes[14] = 3;
     expect(RawTouchSample.fromBytes(rawBytes)).toMatchObject({ touched: true, x: 111, y: 222, touchState: 3 });
+  });
+});
+
+describe("linear touch geometry", () => {
+  it("maps every physical electrode center and neighboring-pad interpolation", () => {
+    expect(TOUCH_ELECTRODE_COUNT).toBe(15);
+    expect(TOUCH_ELECTRODE_PITCH).toBe(64);
+    expect(TOUCH_ELECTRODE_PITCH_MM).toBe(3);
+    expect(TOUCH_POSITION_MAX).toBe(896);
+    expect(TOUCH_LENGTH_MM).toBe(42);
+    for (let pad = 0; pad < 15; pad += 1) {
+      const sample = new TouchState(BigInt(42), true, pad * 64, 0);
+      expect(sample.positionNormalized).toBe(pad / 14);
+      expect(sample.positionMm).toBe(pad * 3);
+    }
+    const midpoint = new RawTouchSample(BigInt(43), true, 32, 0, 0);
+    expect(midpoint.positionMm).toBe(1.5);
+    expect(midpoint.positionNormalized).toBe(32 / 896);
+    // Native TCH can be clear even when the host detects a slider touch.
+    expect(midpoint.touched).toBe(true);
+    expect(midpoint.touchState).toBe(0);
+  });
+
+  it("distinguishes a valid connector-end touch from release and preserves legacy data", () => {
+    expect(new TouchState(BigInt(0), true, 0, 0).positionNormalized).toBe(0);
+    for (const sample of [
+      new TouchState(BigInt(1), false, 0, 0),
+      new TouchState(BigInt(2), true, 4095, 2048),
+      new RawTouchSample(BigInt(3), true, 897, 0, 1),
+      new RawTouchSample(BigInt(4), true, 20, 1, 1),
+      new TouchState(BigInt(5), true, -1, 0),
+      new TouchState(BigInt(6), true, 0.5, 0),
+    ]) {
+      expect(sample.positionNormalized).toBeNull();
+      expect(sample.positionMm).toBeNull();
+    }
+    const legacy = new TouchState(BigInt(7), true, 4095, 2048);
+    expect([legacy.x, legacy.y]).toEqual([4095, 2048]);
+  });
+
+  it("keeps exact signed timestamps, ignores ABI padding and validates malformed packets", () => {
+    const bytes = new Uint8Array(16);
+    const view = new DataView(bytes.buffer);
+    const timestamp = BigInt("9007199254740993");
+    view.setBigInt64(0, timestamp, true);
+    bytes[8] = 1;
+    bytes[9] = 0xa5;
+    view.setUint16(10, 896, true);
+    bytes[14] = 0;
+    bytes[15] = 0x5a;
+    const sample = RawTouchSample.fromBytes(bytes);
+    expect(sample.timestampUs).toBe(timestamp);
+    expect(sample.positionNormalized).toBe(1);
+    expect(sample.positionMm).toBe(42);
+    expect(() => RawTouchSample.fromBytes(bytes.slice(0, 15))).toThrow(ProtocolError);
+    bytes[8] = 2;
+    expect(() => RawTouchSample.fromBytes(bytes)).toThrow(ProtocolError);
+    expect(() => TouchState.fromBytes(new Uint8Array(12))).toThrow(ProtocolError);
+    const state = new Uint8Array(13);
+    state[8] = 2;
+    expect(() => TouchState.fromBytes(state)).toThrow(ProtocolError);
+    expect(() => TouchGestureSample.fromBytes(new Uint8Array(11))).toThrow(ProtocolError);
+    expect(new TouchGestureSample(BigInt(-1), 255, 254).gestureType).toBe(255);
   });
 });
 

@@ -8,11 +8,18 @@ import {
   TOUCH_STATE_UUID,
 } from "../uuids";
 import type { GattClient, MaybePromise } from "./shared";
-import { encodeBoolean, invokeCallback } from "./shared";
+import { encodeBoolean, invokeCallback, requireWriteResponse } from "./shared";
 
 export const TOUCH_STATE_LENGTH = 13;
 export const TOUCH_GESTURE_LENGTH = 10;
 export const TOUCH_RAW_LENGTH = 16;
+
+/** Geometry of the current SensWear linear touch shield, from connector to tip. */
+export const TOUCH_ELECTRODE_COUNT = 15;
+export const TOUCH_ELECTRODE_PITCH = 64;
+export const TOUCH_ELECTRODE_PITCH_MM = 3;
+export const TOUCH_POSITION_MAX = (TOUCH_ELECTRODE_COUNT - 1) * TOUCH_ELECTRODE_PITCH;
+export const TOUCH_LENGTH_MM = (TOUCH_ELECTRODE_COUNT - 1) * TOUCH_ELECTRODE_PITCH_MM;
 
 export enum TouchGesture {
   None = 0,
@@ -49,6 +56,12 @@ export class TouchState extends TouchTimestamped {
   constructor(timestampUs: bigint, readonly touched: boolean, readonly x: number, readonly y: number) {
     super(timestampUs);
   }
+  /** Position along the linear strip, 0..1; null for release or non-slider data. */
+  get positionNormalized(): number | null { return normalizedPosition(this); }
+  /** Nominal distance from the first electrode center, not calibrated accuracy. */
+  get positionMm(): number | null {
+    return this.positionNormalized === null ? null : this.x * TOUCH_ELECTRODE_PITCH_MM / TOUCH_ELECTRODE_PITCH;
+  }
   static fromBytes(payload: ByteInput): TouchState {
     const bytes = bytesFrom(payload);
     assertLength(bytes, TOUCH_STATE_LENGTH, "Touch state");
@@ -59,6 +72,7 @@ export class TouchState extends TouchTimestamped {
 }
 
 export class TouchGestureSample extends TouchTimestamped {
+  /** gestureState is a host-generated MTCH6102 code, not a native register read. */
   constructor(timestampUs: bigint, readonly gesture: number, readonly gestureState: number) {
     super(timestampUs);
   }
@@ -89,6 +103,12 @@ export class RawTouchSample extends TouchTimestamped {
     readonly touchState: number,
   ) {
     super(timestampUs);
+  }
+  /** Position along the linear strip, 0..1; null for release or non-slider data. */
+  get positionNormalized(): number | null { return normalizedPosition(this); }
+  /** Nominal distance from the first electrode center, not calibrated accuracy. */
+  get positionMm(): number | null {
+    return this.positionNormalized === null ? null : this.x * TOUCH_ELECTRODE_PITCH_MM / TOUCH_ELECTRODE_PITCH;
   }
   static fromBytes(payload: ByteInput): RawTouchSample {
     const bytes = bytesFrom(payload);
@@ -127,7 +147,7 @@ export class TouchModule {
     await this.client.writeGattChar(
       TOUCH_SAMPLING_ENABLE_UUID,
       encodeBoolean(enabled, "enabled"),
-      { response: options.response ?? true },
+      { response: requireWriteResponse(options.response) },
     );
   }
 
@@ -174,4 +194,11 @@ export { RawTouchSample as TouchRawState };
 
 function validateBoolean(value: number, label: string): void {
   if (value > 1) throw new ProtocolError(`${label} boolean must be encoded as 0 or 1.`);
+}
+
+function normalizedPosition(sample: { touched: boolean; x: number; y: number }): number | null {
+  if (!sample.touched || sample.y !== 0 || !Number.isInteger(sample.x) || sample.x < 0 || sample.x > TOUCH_POSITION_MAX) {
+    return null;
+  }
+  return sample.x / TOUCH_POSITION_MAX;
 }

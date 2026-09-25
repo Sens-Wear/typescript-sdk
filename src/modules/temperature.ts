@@ -3,7 +3,7 @@ import type { ByteInput } from "../binary";
 import { ProtocolError } from "../errors";
 import { MEASUREMENT_INTERVAL_UUID, TEMPERATURE_MEASUREMENT_UUID, TEMPERATURE_TYPE_UUID } from "../uuids";
 import type { GattClient, MaybePromise } from "./shared";
-import { invokeCallback } from "./shared";
+import { invokeCallback, requireWriteResponse } from "./shared";
 
 export const TEMPERATURE_INTERVAL_RESOLUTION_SECONDS = 60;
 export const TEMPERATURE_INTERVAL_MAX_SECONDS =
@@ -103,9 +103,7 @@ export class TemperatureModule {
   }
 
   async readMeasurementInterval(): Promise<number> {
-    const bytes = bytesFrom(await this.client.readGattChar(MEASUREMENT_INTERVAL_UUID));
-    if (bytes.length !== 2) throw new ProtocolError("Measurement Interval payload must be 2 bytes.");
-    return readUint16LE(dataView(bytes), 0);
+    return decodeMeasurementInterval(await this.client.readGattChar(MEASUREMENT_INTERVAL_UUID));
   }
 
   async setMeasurementInterval(seconds: number, options: { response?: boolean } = {}): Promise<void> {
@@ -116,7 +114,7 @@ export class TemperatureModule {
       throw new RangeError("seconds must be 0 or a whole-minute multiple of 60.");
     }
     await this.client.writeGattChar(MEASUREMENT_INTERVAL_UUID, writeUint16LE(seconds), {
-      response: options.response ?? true,
+      response: requireWriteResponse(options.response),
     });
   }
 
@@ -130,6 +128,28 @@ export class TemperatureModule {
   async unsubscribe(): Promise<void> {
     await this.client.stopNotify(this.measurementUuid);
   }
+
+  /** Monitor acknowledged interval indications, in seconds after firmware rounding. */
+  async subscribeMeasurementInterval(callback: (seconds: number) => MaybePromise<void>): Promise<void> {
+    await this.unsubscribeMeasurementInterval();
+    await this.client.startNotify(MEASUREMENT_INTERVAL_UUID, (_sender, data) => {
+      invokeCallback(callback, decodeMeasurementInterval(data));
+    });
+  }
+
+  async unsubscribeMeasurementInterval(): Promise<void> {
+    await this.client.stopNotify(MEASUREMENT_INTERVAL_UUID);
+  }
+
+  async unsubscribeAll(): Promise<void> {
+    await Promise.all([this.unsubscribe(), this.unsubscribeMeasurementInterval()]);
+  }
+}
+
+function decodeMeasurementInterval(payload: ByteInput): number {
+  const bytes = bytesFrom(payload);
+  if (bytes.length !== 2) throw new ProtocolError("Measurement Interval payload must be 2 bytes.");
+  return readUint16LE(dataView(bytes), 0);
 }
 
 function decodeIeee11073Float(raw: number): number {

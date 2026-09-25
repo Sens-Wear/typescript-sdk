@@ -1,4 +1,5 @@
 export * from "./battery";
+export * from "./deviceInfo";
 export * from "./charger";
 export * from "./haptic";
 export * from "./imu";

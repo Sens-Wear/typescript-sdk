@@ -2,6 +2,7 @@ import { assertLength, bytesFrom, concatBytes, dataView, readUint16LE, writeUint
 import { ProtocolError } from "../errors";
 import { HAPTIC_PATTERN_UUID } from "../uuids";
 import type { GattClient } from "./shared";
+import { requireWriteResponse } from "./shared";
 
 export const HAPTIC_PATTERN_VERSION = 1;
 export const HAPTIC_PATTERN_FLAGS = 0;
@@ -191,13 +192,13 @@ export class HapticModule {
   async play(pattern: HapticPatternInput, options: { response?: boolean } = {}): Promise<void> {
     const hapticPattern = coercePattern(pattern);
     await this.client.writeGattChar(this.patternUuid, hapticPattern.toBytes(), {
-      response: options.response ?? true,
+      response: requireWriteResponse(options.response),
     });
   }
 
   async vibrate(durationMs: number, intensity = 255, options: { response?: boolean } = {}): Promise<void> {
     await this.play(new HapticPattern([new HapticFrame(durationMs, intensity)]), {
-      response: options.response ?? true,
+      response: requireWriteResponse(options.response),
     });
   }
 }
